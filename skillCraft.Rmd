@@ -1,0 +1,351 @@
+---
+title: 'Tipología y ciclo de vida de los datos'
+subtitle: 'Práctica 2'
+author: "José Carlos García Pérez"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    number_sections: true
+geometry: left=3cm,right=3cm,top=2cm,bottom=2cm
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Descripción del dataset
+
+Se van a usar datos de un proyecto conocido como SkillCraft (http://skillcraft.ca). La idea es aprender cómo desarrollan las personas habilidades complejas estudiando su desempeño en juegos de estrategia en tiempo real, donde hay que gestionar recursos y tomar decisiones estratégicas.
+
+Estos datos corresponden a jugadores de Starcraft 2, un juego donde los jugadores compiten entre sí. Cada jugador elige una raza de entre tres posibles y comienza con seis trabajadores, que pueden usarse para construir fábricas, edificios militares, más trabajadores, etc.
+
+Es un juego que mezcla crecimiento económico y estrategia militar en tiempo real.
+
+En este estudio vamos a analizar qué variables contribuyen más a determinar en qué liga juega un jugador, en función de ciertas medidas de desempeño y, si es posible, trataremos de generar un modelo capaz de ubicar a un jugador en la liga correspondiente en función de estas variables.
+
+Los datos están disponibles en https://archive.ics.uci.edu/ml/datasets/SkillCraft1+Master+Table+Dataset
+
+El dataset consta de los siguientes atributos:
+
+Variable              | Descripción
+----------------------| -------------------------------------------------------------------------------------------------------------------
+GameID                | Identificador único de la partida (integer)
+LeagueIndex           | Índice de la liga: Bronze, Silver, Gold, Platinum, Diamond, Master, GrandMaster y Professional (valores del 1 al 8)
+Age                   | Edad del jugador (integer)
+HoursPerWeek          | Horas de juego a la semana (integer)
+TotalHours            | Horas jugadas en total (integer)
+APM                   | Acciones por minuto (variable continua)
+SelectByHotkeys       | Número de selecciones de unidades o edificios por hotkeys por unidad de tiempo (variable continua)
+AssignToHotkeys       | Número de unidades o edificios asignados a hotkeys por unidad de tiempo (variable continua)
+UniqueHotkeys         | Número de hotkeys únicas usadas por unidad de tiempo (variable continua)
+MinimapAttacks        | Número de acciones de ataque en minimap por unidad de tiempo (variable continua)
+MinimapRightClicks    | Número de clics con el botón derecho en el minimap por unidad de tiempo (variable continua)
+NumberOfPACs          | Número de PACs (Perception Action Cycle) por unidad de tiempo (variable continua)
+GapBetweenPACs        | Duración media en milisegundos entre PACs (variable continua)
+ActionLatency         | Latencia media desde el inicio de una PAC hasta su primera acción en milisegundos (variable continua)
+ActionsInPAC          | Número medio de acciones dentro de cada PAC (variable continua)
+TotalMapExplored      | El número de cuadrantes de 24x24 examinados por el jugador por unidad de tiempo (variable continua)
+WorkersMade           | Número de trabajadores entrenados por unidad de tiempo (variable continua)
+UniqueUnitsMade       | Unidades únicas creadas por unidad de tiempo (variable continua)
+ComplexUnitsMade      | Número de unidades complejas entrenadas por unidad de tiempo (variable continua)
+ComplexAbilitiesUsed  | Habilidades que requieren instrucciones específicas usadas por unidad de tiempo (variable continua)
+
+La variable de salida es la variable *LeagueIndex*, que toma los valores de 1 a 8, correspondientes a cada una de las ligas.
+
+# Integración y selección de los datos de interés a analizar
+
+Como primer paso y para que los resultados sean reproducibles, inicializaremos la semilla de números aleatorios.
+```{r}
+set.seed(100)
+```
+
+A continuación cargaremos el dataset. Hay que tener en cuenta que el archivo csv debe estar en el directorio de trabajo. En caso contrario hay que especificar la ruta absoluta al archivo.
+
+```{r}
+# Leemos los datos
+skillData <- read.csv("SkillCraft1_Dataset.csv")
+```
+
+Examinaremos si el dataset se ha cargado correctamente, según la especificación de los atributos del apartado anterior.
+
+```{r}
+# Echamos un vistazo a los datos
+str(skillData)
+```
+
+Como puede observarse, el dataset consta de **3395 observaciones de 20 variables**. las variables *Age*, *HoursPerWeek* y *TotalHours* se han cargado como factores, lo que nos hace sospechar que podría haber valores extraños. Examinemos en detalle estas variables.
+
+```{r}
+# Niveles de las variables sospechosas
+levels(skillData$Age)
+```
+
+```{r}
+levels(skillData$HoursPerWeek)
+```
+
+```{r}
+levels(skillData$TotalHours)
+```
+
+Las tres columnas *sospechosas* incluyen el carácter **?** para indicar valores vacíos, y son los responsables de que R tome estas variables como si fueran factores. Volveremos a cargar los datos, pero esta vez haciendo la conversión del carácter **?** al valor **NA**.
+
+```{r}
+skillData <- read.csv("SkillCraft1_Dataset.csv", na.strings = "?")
+```
+
+Examinemos de nuevo las columnas:
+
+```{r}
+str(skillData)
+```
+
+En esta ocasión R sí cargó correctamente los datos, veamos el resumen estadístico de las variables anteriores:
+
+```{r}
+summary(subset(skillData, select = c(Age, HoursPerWeek, TotalHours)))
+```
+
+Efectivamente, esta vez sí que tenemos los valores vacíos como NA. 
+
+Si prestamos atención a los datos, hay una variable que no nos servirá en nuestro análisis, y es la variable *GameID*, ya que esta variable es un identificador único y es distinta por cada fila.
+
+La eliminaremos antes de pasar al siguiente punto.
+
+```{r}
+# Eliminamos el id de la partida
+skillData$GameID <- NULL
+```
+
+# Limpieza de los datos
+
+Como vimos en el apartado anterior el dataset cuenta con valores vacíos:
+
+- Age: `r sum(is.na(skillData$Age))`
+- HoursPerWeek: `r sum(is.na(skillData$HoursPerWeek))`
+- TotalHours: `r sum(is.na(skillData$TotalHours))`
+
+El número de observaciones con valores vacíos es muy pequeño en relación con el total de observaciones, pero aún así se van a imputar sus valores usando la técnica de los k vecinos más próximos. Para ello, se usará la implementación del paquete *VIM*.
+
+```{r  message = FALSE}
+library(VIM)
+# La función kNN genera una nueva columna lógica que indica si se han imputado valores o no
+skillData <- kNN(skillData, variable = c('Age', 'HoursPerWeek', 'TotalHours'))
+```
+
+De hecho, ya no existe ningún valor vacío. Han sido imputados usando los valores de otras observaciones similares, usando la distancia de Gower.
+
+- Age: `r sum(is.na(skillData$Age))`
+- HoursPerWeek: `r sum(is.na(skillData$HoursPerWeek))`
+- TotalHours: `r sum(is.na(skillData$TotalHours))`
+
+Para detectar la presencia de valores atípicos examinaremos primero el resumen de los cinco números de Tukey, donde podremos obtener un pequeño análisis descriptivo de los datos. Si la media y la mediana están muy separadas, examinaremos más en detalle las variables para detectar los valores extremos.
+
+```{r}
+# Eliminamos las columnas incluidas por la función kNN, que indican dónde se imputaron valores
+skillData <- subset(skillData, select = c(-Age_imp, -HoursPerWeek_imp, -TotalHours_imp))
+
+summary(skillData)
+```
+
+Parece que hay muchas variables que llaman la atención, como por ejemplo *TotalHours*, donde la mediana es `r median(skillData$TotalHours)` horas y sin embargo la media es `r mean(skillData$TotalHours)` horas. Veamos cuáles son estos valores extremos, y si podría deberse a un error o son valores perfectamente válidos.
+
+Los ceros que observamos en las columnas *HoursPerWeek*, *SelectByHotkeys*, *AssignToHotkeys*, *UniqueHotkeys*, *MinimapAttacks*, *MinimapRightClicks*, *ComplexUnitsMade* y *ComplexAbilitiesUsed* son valores válidos.
+
+```{r}
+# La fila out indica el número de valores atípicos por columna
+sapply(skillData, boxplot.stats)
+```
+
+Las columnas *Age*, *HoursPerWeek*, *TotalHours*, *APM*, *SelectByHotkeys*, *AssignToHotkeys*, *MinimapAttacks*, *MinimapRightClicks*, *NumberOfPACs*, *GapBetweenPACs*, *ActionLatency*, *ActionsInPAC*, *TotalMapExplored*, *WorkersMade*, *UniqueUnitsMade*, *ComplexUnitsMade* y *ComplexAbilitiesUsed* presentan valores extremos (columna *out*). En principio, salvo en los casos de *HoursPerWeek* y *TotalHours*, consideraremos que los demás valores son correctos, ya que lógicamente hay jugadores que tienen más experiencia que otros.
+
+**En el caso de *HoursPerWeek*, el valor máximo es `r max(skillData$HoursPerWeek)`, que justamente es el número de horas de una semana, por lo que consideraremos este valor incorrecto**, ya que implicaría que el jugador está activo las 24 horas del día, los 7 días de la semana. De hecho, el 99% de los datos están por debajo de 56 horas, que será el umbral que usaremos para seleccionar las observaciones que consideraremos correctas para este estudio.
+
+```{r}
+ninetyNinePercentile <-quantile(skillData$HoursPerWeek, 0.99)
+
+cleanSkillData <- skillData[skillData$HoursPerWeek <= ninetyNinePercentile[[1]], ]
+```
+
+En el caso de *TotalHours* seguiremos una estrategia similar.
+
+```{r}
+ninetyNinePercentile <-quantile(skillData$TotalHours, 0.99)
+
+cleanSkillData <- skillData[skillData$TotalHours <= ninetyNinePercentile[[1]], ]
+```
+
+El dataset contiene ahora `r nrow(cleanSkillData)` filas. Generaremos un nuevo csv con este conjunto.
+
+```{r}
+write.csv(cleanSkillData, "cleanSkillCraftData.csv", row.names = FALSE)
+```
+
+# Análisis de los datos
+
+En nuestro caso, el objetivo es detectar las variables que más contribuyen a explicar la liga en la que está ubicado el jugador y, si es posible, generar un modelo predictivo y/o de clasificación para ubicar a un jugador en una liga según las variables de su desempeño en el juego. Para ello, dividiremos el dataset en dos conjuntos, uno para entrenamiento y generación del modelo, y otro para su evaluación. Se usará el paquete **caret** para seleccionar el 80% de los datos para entrenamiento y el restante 20% para evaluación.
+
+```{r message = FALSE}
+library(caret)
+
+index <- createDataPartition(cleanSkillData$LeagueIndex, p = 0.8, list = FALSE)
+
+trainSet <- cleanSkillData[index,]
+testSet <- cleanSkillData[-index,]
+```
+
+Se ha dividido el dataset en dos subconjuntos. Por un lado, un conjunto de entrenamiento de `r nrow(trainSet)` observaciones y por otro, un conjunto de evaluación con `r nrow(testSet)` observaciones.
+
+## Normalidad y homogeneidad de la varianza
+
+A continuación estudiaremos la normalidad y homogeneidad de la varianza en nuestro conjunto. Para ello se usará el test de normalidad de Anderson-Darling, que básicamente realiza el siguiente contraste de hipótesis:
+
+- H0: No hay diferencias observables entre los datos y la distribución normal
+- H1: Existen diferencias observables entre los datos y la distribución normal
+
+```{r}
+library(nortest)
+
+sapply(skillData, ad.test)
+```
+
+Si nos fijamos en los p-valores obtenidos por cada columna, son mucho menores que el nivel de significación por defecto, 0.05, por lo que no aceptaríamos la hipótesis nula y aceptaríamos que las variables no siguen una distribución normal.
+
+Adicionalmente, aplicaremos el test de normalidad de Shapiro-Wilk.
+
+```{r}
+sapply(skillData, shapiro.test)
+```
+
+Al igual que con el test de Anderson-Darling, podemos confirmar que las variables no tienen una distribución normal.
+
+Gráficamente, podemos usar las gráficas *quantile-quantile*.
+
+```{r}
+par(mfrow=c(2,2))
+
+for (col in 1:ncol(skillData)) {
+  qqnorm(skillData[col, ], main = colnames(skillData)[col])
+  qqline(skillData[col, ], col = "red")
+}
+```
+
+En nuestro estudio, podría ser interesante estudiar la homogeneidad de las varianzas por edad. Para ello crearemos cuatro grupos y aplicaremos el test de Fligner-Killeen, que es una buena opción con datos no normales y con presencia de *outliers*.
+
+```{r}
+skillData$AgeRange <- cut(skillData$Age, 4)
+
+fligner.test(LeagueIndex ~ AgeRange, data = skillData)
+```
+
+El valor-p es muy inferior a 0.05, por lo que no aceptaríamos la hipótesis de que las varianzas son homogéneas.
+
+## Correlación con la variable dependiente
+
+A continuación obtendremos las variables con mayor correlación con la variable dependiente. Para ello usaremos la función *findCorrelation* del paquete *caret*, que a partir de la matriz de correlación nos devolverá las variables con un coeficiente de correlación superior a 0.7.
+
+```{r}
+correlationMatrix <- cor(cleanSkillData)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff = 0.7)
+
+colnames(cleanSkillData)[highlyCorrelated]
+```
+
+## Modelo de regresión lineal
+
+Crearemos un modelo de regresión lineal con los dos predictores anteriores, usando el conjunto de entrenamiento (*train set*). Para su evaluación, se usará el *test set*.
+
+```{r}
+linearModel <- lm(LeagueIndex ~ APM + ActionLatency, data = trainSet)
+
+linearModelSummary <- summary(linearModel)
+
+linearModelSummary
+```
+
+Para obtener una métrica del error obtenido, se creará una función que calcule la raíz cuadrada del error cuadrático medio. Cuanto más bajo, mejor. En este caso, nos indica en promedio el número de ligas que nos estamos desviando en las predicciones.
+
+```{r}
+rmse <- function(actual, predicted) {
+    sqrt(mean((actual - predicted)^2))
+}
+
+linearModelPredictions <- predict(linearModel, testSet)
+linearModelError <- rmse(testSet$LeagueIndex, linearModelPredictions)
+
+linearModelError
+```
+
+## Modelo de clasificación
+
+Con el modelo anterior cometemos un error en promedio de `r linearModelError` ligas. Dado que la variable objetivo es un valor discreto (aunque numérico), podría ser una buena opción abordar el problema como un problema de clasificación, en lugar de regresión. Para ello generaremos un nuevo modelo, basado en árboles de decisión.
+
+```{r}
+library(C50)
+
+# Se convierte la variable objetivo a factor, para hacerla discreta en lugar de continua
+trainSet$LeagueIndex <- as.factor(trainSet$LeagueIndex)
+testSet$LeagueIndex <- as.factor(testSet$LeagueIndex)
+
+# Se usan todas las variables predictoras
+treeModel <- C5.0(LeagueIndex ~ ., data = trainSet)
+
+treeModelPredictions <- predict(treeModel, testSet)
+```
+
+# Resultados
+
+La aproximación como problema de regresión lineal arroja un error de `r linearModelError` ligas. La siguiente tabla muestra el resultado del modelo regresión lineal en el *test set* (sólo se muestran las primeras predicciones).
+
+```{r}
+linearModelDF <- data.frame("Valor real" = testSet$LeagueIndex, "Predicción" = linearModelPredictions)
+
+head(linearModelDF)
+```
+
+Al discretizar la variable objetivo, ya que sólo puede tomar valores del 1 al 8, y evaluar el modelo en *train set*, obtenemos la siguiente matriz de confusión (en el conjunto de entrenamiento):
+
+```{r}
+confusionMatrix(trainSet$LeagueIndex, predict(treeModel, trainSet))
+```
+
+Si comparamos con el error que obtenemos en el conjunto de evaluación **probablemente estemos ante un problema de sobreajuste**, ya que la precisión en el *test set* es muchísima peor. O podría ser que el conjunto de entrenamiento no es representativo del total, aunque la función *createDataPartition* tiene en cuenta este hecho para hacer una partición estratificada. El árbol de decisión generado es capaz de explicar los datos de entrenamiento, pero no generaliza bien:
+
+```{r}
+confusionMatrix(testSet$LeagueIndex, treeModelPredictions)
+```
+
+Por último, trataremos de mejorar el resultado con *random forests*, una técnica más compleja basada en árboles de decisión.
+
+```{r, message = FALSE}
+library(randomForest)
+
+rfModel <- randomForest(LeagueIndex ~ ., data = trainSet)
+
+rfModelPredictions <- predict(rfModel, testSet, type = "class")
+```
+
+Examinemos el resultado evaluando el modelo basado en *random forests*:
+
+```{r}
+confusionMatrix(testSet$LeagueIndex, rfModelPredictions)
+```
+
+Aunque supone una mejora con respecto al modelo anterior, detecta muy pocos verdaderos positivos, salvo quizá para la liga 8. Según este modelo, las variables más relevantes son las siguientes:
+
+```{r}
+varImpPlot(rfModel, sort = TRUE, n.var = 10, main="Importancia de las top 10 variables", col="dark blue", pch=19)
+```
+
+# Conclusiones
+
+El estudio anterior nos lleva a pensar que es posible averiguar qué variables son las que más contribuyen a ubicar a un jugador en una liga u otra. De hecho, podríamos afirmar que *APM* y *ActionLatency* son los mejores predictores, como puede observarse tanto en el estudio de correlación como en el resultado del *varImpPlot* del punto anterior.
+
+A pesar de que el resultado con árboles de decisión no ha sido muy bueno, probablemente se pueda mejorar considerablemente si discretizáramos otras variables, como por ejemplo la edad del jugador o las horas de juego. En cualquier caso, un desvío en promedio de `r linearModelError` ligas en las predicciones con el modelo lineal nos lleva a pensar que trabajando un poco más el dataset podamos llegar a obtener un modelo lineal más preciso, y mucho más fácil de interpretar que, por ejemplo, el modelo basado en *random forests*.
+
+# Referencias
+
+1. [Normality tests for continuous data] (https://www.r-bloggers.com/normality-tests-for-continuous-data/)
+2. [Homogeneity of variance](http://www.cookbook-r.com/Statistical_analysis/Homogeneity_of_variance/)
